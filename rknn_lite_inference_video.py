@@ -38,6 +38,7 @@ if __name__ == '__main__':
             outputs = rknn_lite.inference(inputs=[image_3c])
             stop = time.time()
             fps = round(1/(stop-start), 2)
+            print("FPS: ", fps)
             outputs[0]=np.squeeze(outputs[0])
             outputs[0] = np.expand_dims(outputs[0], axis=0)
             colorlist = gen_color(len(CLASSES))

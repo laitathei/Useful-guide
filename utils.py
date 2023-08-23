@@ -45,6 +45,7 @@ def process_mask(protos, masks_in, bboxes, shape):
     c, mh, mw = protos.shape  # CHW
     ih, iw = shape
     masks = sigmoid(masks_in @ protos.reshape(c, -1)).reshape(-1, mh, mw)  # CHW 【lulu】
+
     downsampled_bboxes = bboxes.copy()
     downsampled_bboxes[:, 0] *= mw / iw
     downsampled_bboxes[:, 2] *= mw / iw
@@ -127,12 +128,9 @@ def non_max_suppression(
         # Apply constraints
         # x[((x[:, 2:4] < min_wh) | (x[:, 2:4] > max_wh)).any(1), 4] = 0  # width-height
 
-        x = np.transpose(x,[1, 0])
-        x = x[xc[xi]] ## 【lulu】
-
+        x = np.transpose(x,[1,0])[xc[xi]] ## 【lulu】
         # If none remain process next image_3c
         if not x.shape[0]: continue
-
 
         # Detections matrix nx6 (xyxy, conf, cls)
         box, cls, mask = np.split(x, [4, 4+nc], axis=1) ## 【lulu】
@@ -146,7 +144,6 @@ def non_max_suppression(
         n = x.shape[0]  # number of boxes
         if not n: continue
         x = x[np.argsort(x[:, 4])[::-1][:max_nms]]  # sort by confidence and remove excess boxes 【lulu】
-
         # Batched NMS
         c = x[:, 5:6] * max_wh  # classes
         boxes, scores = x[:, :4] + c, x[:, 4]  # boxes (offset by class), scores
@@ -154,10 +151,37 @@ def non_max_suppression(
         i = i[:max_det]  # limit detections
 
         output[xi] = x[i]
+
         if (time.time() - t) > time_limit:
             # LOGGER.warning(f'WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded')
             break  # time limit exceeded
     return output
+
+def make_anchors(feats_shape, strides, grid_cell_offset=0.5):
+    """Generate anchors from features."""
+    anchor_points, stride_tensor = [], []
+    assert feats_shape is not None
+    dtype_ = np.float
+    for i, stride in enumerate(strides):
+        _, _, h, w = feats_shape[i]
+        sx = np.arange(w, dtype=dtype_) + grid_cell_offset  # shift x
+        sy = np.arange(h, dtype=dtype_) + grid_cell_offset  # shift y
+
+        sy, sx = np.meshgrid(sy, sx, indexing='ij') 
+        anchor_points.append(np.stack((sx, sy), -1).reshape(-1, 2))
+        stride_tensor.append(np.full((h * w, 1), stride, dtype=dtype_))
+    return np.concatenate(anchor_points), np.concatenate(stride_tensor)
+
+def dist2bbox(distance, anchor_points, xywh=True, dim=-1):
+    """Transform distance(ltrb) to box(xywh or xyxy)."""
+    lt, rb = np.split(distance, 2, dim)
+    x1y1 = anchor_points - lt
+    x2y2 = anchor_points + rb
+    if xywh:
+        c_xy = (x1y1 + x2y2) / 2
+        wh = x2y2 - x1y1
+        return np.concatenate((c_xy, wh), dim)  # xywh bbox
+    return np.concatenate((x1y1, x2y2), dim)  # xyxy bbox
 
 def letterbox(im, new_shape=(640, 640), color=(114, 114, 114), auto=True, scaleFill=False, scaleup=True, stride=32):
     # Resize and pad image while meeting stride-multiple constraints
@@ -198,7 +222,6 @@ def preprocess(image, input_height, input_width):
     image_3c = cv2.cvtColor(image_3c, cv2.COLOR_BGR2RGB)
 
     # Resize the image_3c to match the input shape
-    #image_3c = cv2.resize(image_3c, (input_width, input_height))
     image_3c, ratio, dwdh = letterbox(image_3c, new_shape=[input_height, input_width], auto=False)
 
     # Normalize the image_3c data by dividing it by 255.0
@@ -221,6 +244,7 @@ def postprocess(preds, img, orig_img, OBJ_THRESH, NMS_THRESH, classes=None):
                                 max_det=300,
                                 nc=classes,
                                 classes=None)        
+    #print(p)                    
     results = []
     proto = preds[1]  
     for i, pred in enumerate(p):
